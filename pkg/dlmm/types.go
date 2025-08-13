@@ -1,13 +1,44 @@
 package dlmm
 
-import "github.com/gagliardetto/solana-go"
+import (
+	"github.com/gagliardetto/solana-go"
+
+	lb_clmm "github.com/metfin/dlmm-sdk-go/pkg/generated"
+)
 
 // Pool is a user-facing decoded representation of a DLMM pool account.
-// This is intentionally minimal for the scaffold; it can be expanded to
-// mirror the TS SDK types once `pkg/generated` is available.
+// It wraps the generated `LbPair` account for convenience and forward-compat.
 type Pool struct {
     Address solana.PublicKey
-    // Add fields mapped from the generated account layout.
+    LbPair  *lb_clmm.LbPair
+}
+
+
+// BinLiquidity mirrors the important fields returned by the TS SDK helper.
+type BinLiquidity struct {
+    BinID           int32
+    Price           string
+    PricePerToken   string
+}
+
+// PositionData is a condensed representation of a processed position.
+// It intentionally mirrors the TS PositionData shape for downstream use.
+type PositionData struct {
+    TotalXAmount                 string
+    TotalYAmount                 string
+    LastUpdatedAt                int64
+    UpperBinId                   int32
+    LowerBinId                   int32
+    TotalClaimedFeeXAmount       uint64
+    TotalClaimedFeeYAmount       uint64
+    Owner                        solana.PublicKey
+}
+
+// LbPosition wraps a position address with its processed data and a version tag.
+type LbPosition struct {
+    PublicKey    solana.PublicKey
+    PositionData PositionData
+    Version      int // 2 for PositionV2
 }
 
 

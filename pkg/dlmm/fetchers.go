@@ -5,10 +5,11 @@ import (
 
 	"github.com/gagliardetto/solana-go"
 	solanarpc "github.com/gagliardetto/solana-go/rpc"
+
+	lb_clmm "github.com/metfin/dlmm-sdk-go/pkg/generated"
 )
 
 // GetPool fetches and decodes a DLMM pool account.
-// TODO: Replace placeholder decode with actual mapping from pkg/generated.
 func (c *Client) GetPool(ctx context.Context, poolPubkey solana.PublicKey) (*Pool, error) {
     resp, err := c.rpc.GetAccountInfoWithOpts(ctx, poolPubkey, &solanarpc.GetAccountInfoOpts{
         Commitment: c.commitment,
@@ -20,8 +21,14 @@ func (c *Client) GetPool(ctx context.Context, poolPubkey solana.PublicKey) (*Poo
         return nil, ErrAccountNotFound
     }
 
-    // Placeholder: we'll decode using pkg/generated account struct later.
-    pool := &Pool{Address: poolPubkey}
+    data := resp.Value.Data.GetBinary()
+
+    parsed, err := lb_clmm.ParseAccount_LbPair(data)
+    if err != nil {
+        return nil, err
+    }
+
+    pool := &Pool{Address: poolPubkey, LbPair: parsed}
     return pool, nil
 }
 
