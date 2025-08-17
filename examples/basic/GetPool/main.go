@@ -18,7 +18,7 @@ func main() {
     // Initialize DLMM client (thin wrapper around generated code)
     client := dlmm.NewClient(rpc, dlmm.WithProgramID(solana.MustPublicKeyFromBase58("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo")))
 
-	poolPubkey := solana.MustPublicKeyFromBase58("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo")
+	poolPubkey := solana.MustPublicKeyFromBase58("HwEfZWKzMGqa6qgKqWLtsDXbx4bgexw5mQSBQj34asWt")
 	pool, err := client.GetPool(ctx, poolPubkey)
 	if err != nil {
 		log.Fatalf("get pool: %v", err)
