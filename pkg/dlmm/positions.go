@@ -79,11 +79,67 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 			TotalClaimedFeeXAmount: pos.TotalClaimedFeeXAmount,
 			TotalClaimedFeeYAmount: pos.TotalClaimedFeeYAmount,
 			Owner:                  pos.Owner,
+			LbPair:                 pos.LbPair,
+			Operator:               pos.Operator,
+			FeeOwner:               pos.FeeOwner,
+			LockReleasePoint:       pos.LockReleasePoint,
+			TotalClaimedRewards:    pos.TotalClaimedRewards,
 		}
 		positions = append(positions, LbPosition{PublicKey: acc.Pubkey, PositionData: pd, Version: 2})
 	}
 
 	return &PositionsByUserAndLbPairResult{ActiveBin: active, UserPositions: positions}, nil
+}
+
+// GetPositionsByLbPair returns all PositionV2 accounts that belong to the given lbPair.
+// Mirrors the implementation of GetPositionsByUserAndLbPair but removes the user filter.
+func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicKey) ([]LbPosition, error) {
+    programID := c.programID
+    if programID.IsZero() {
+        programID = lb_clmm.ProgramID
+    }
+
+    opts := &solanarpc.GetProgramAccountsOpts{
+        Commitment: c.commitment,
+        Filters: []solanarpc.RPCFilter{
+            // positionV2Filter()
+            memcmpFilter(0, lb_clmm.Account_PositionV2[:]),
+            // positionLbPairFilter(lbPair)
+            memcmpFilter(8, lbPair.Bytes()),
+        },
+    }
+
+    accs, err := c.rpc.GetProgramAccountsWithOpts(ctx, programID, opts)
+    if err != nil {
+        return nil, err
+    }
+
+    positions := make([]LbPosition, 0, len(accs))
+    for _, acc := range accs {
+        bin := acc.Account.Data.GetBinary()
+        pos, err := lb_clmm.ParseAccount_PositionV2(bin)
+        if err != nil {
+            return nil, err
+        }
+        pd := PositionData{
+            TotalXAmount:           "0",
+            TotalYAmount:           "0",
+            LastUpdatedAt:          pos.LastUpdatedAt,
+            UpperBinId:             pos.UpperBinId,
+            LowerBinId:             pos.LowerBinId,
+            TotalClaimedFeeXAmount: pos.TotalClaimedFeeXAmount,
+            TotalClaimedFeeYAmount: pos.TotalClaimedFeeYAmount,
+            Owner:                  pos.Owner,
+            LbPair:                 pos.LbPair,
+            Operator:               pos.Operator,
+            FeeOwner:               pos.FeeOwner,
+            LockReleasePoint:       pos.LockReleasePoint,
+            TotalClaimedRewards:    pos.TotalClaimedRewards,
+        }
+        positions = append(positions, LbPosition{PublicKey: acc.Pubkey, PositionData: pd, Version: 2})
+    }
+
+    return positions, nil
 }
 
 // memcmpFilter helper to construct an RPC memcmp filter.
