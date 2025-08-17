@@ -32,6 +32,11 @@ type PositionData struct {
     TotalClaimedFeeXAmount       uint64
     TotalClaimedFeeYAmount       uint64
     Owner                        solana.PublicKey
+    LbPair                       solana.PublicKey
+    Operator                     solana.PublicKey
+    FeeOwner                     solana.PublicKey
+    LockReleasePoint             uint64
+    TotalClaimedRewards          [2]uint64
 }
 
 // LbPosition wraps a position address with its processed data and a version tag.
@@ -39,6 +44,16 @@ type LbPosition struct {
     PublicKey    solana.PublicKey
     PositionData PositionData
     Version      int // 2 for PositionV2
+}
+
+
+// EnrichedPositionData is a computed summary for a single position address.
+// Values are raw token units (not adjusted for decimals).
+type EnrichedPositionData struct {
+    TotalXAmount    string
+    TotalYAmount    string
+    FeeXToClaim     uint64
+    FeeYToClaim     uint64
 }
 
 

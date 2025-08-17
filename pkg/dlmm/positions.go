@@ -205,4 +205,153 @@ func deriveBinArray(lbPair solana.PublicKey, index int64, programID solana.Publi
 	return addr, bump, err
 }
 
+// GetEnrichedPositionData computes total token amounts and claimable fees for a position.
+// Returns raw amounts (unscaled by token decimals).
+func (c *Client) GetEnrichedPositionData(ctx context.Context, positionAddr solana.PublicKey) (*EnrichedPositionData, error) {
+    // Load position account
+    resp, err := c.rpc.GetAccountInfoWithOpts(ctx, positionAddr, &solanarpc.GetAccountInfoOpts{Commitment: c.commitment})
+    if err != nil {
+        return nil, err
+    }
+    if resp == nil || resp.Value == nil {
+        return nil, ErrAccountNotFound
+    }
+    bin := resp.Value.Data.GetBinary()
+    pos, err := lb_clmm.ParseAccount_PositionV2(bin)
+    if err != nil {
+        return nil, fmt.Errorf("decode position: %w", err)
+    }
 
+    // Load lbPair to know binStep if needed; amounts are directly in bin though
+    lbResp, err := c.rpc.GetAccountInfoWithOpts(ctx, pos.LbPair, &solanarpc.GetAccountInfoOpts{Commitment: c.commitment})
+    if err != nil {
+        return nil, err
+    }
+    if lbResp == nil || lbResp.Value == nil {
+        return nil, ErrAccountNotFound
+    }
+    _, err = lb_clmm.ParseAccount_LbPair(lbResp.Value.Data.GetBinary())
+    if err != nil {
+        return nil, fmt.Errorf("decode lbPair: %w", err)
+    }
+
+    // Determine bin array indices range
+    lowerIdx := binIdToBinArrayIndex(pos.LowerBinId)
+    upperIdx := binIdToBinArrayIndex(pos.UpperBinId)
+
+    // Fetch all required BinArray accounts
+    programID := c.programID
+    if programID.IsZero() {
+        programID = lb_clmm.ProgramID
+    }
+    type arrayEntry struct {
+        idx   int64
+        key   solana.PublicKey
+        array *lb_clmm.BinArray
+    }
+    arrays := make(map[int64]*lb_clmm.BinArray)
+    for idx := lowerIdx; idx <= upperIdx; idx++ {
+        pda, _, err := deriveBinArray(pos.LbPair, idx, programID)
+        if err != nil {
+            return nil, err
+        }
+        arResp, err := c.rpc.GetAccountInfoWithOpts(ctx, pda, &solanarpc.GetAccountInfoOpts{Commitment: c.commitment})
+        if err != nil {
+            return nil, err
+        }
+        if arResp == nil || arResp.Value == nil {
+            // If a BinArray is missing, treat as zeros
+            arrays[idx] = nil
+            continue
+        }
+        arr, err := lb_clmm.ParseAccount_BinArray(arResp.Value.Data.GetBinary())
+        if err != nil {
+            return nil, fmt.Errorf("decode binArray %d: %w", idx, err)
+        }
+        arrays[idx] = arr
+    }
+
+    // Aggregate totals and fees
+    totalX := new(big.Int)
+    totalY := new(big.Int)
+    feeXBig := new(big.Int)
+    feeYBig := new(big.Int)
+    scaleSquared := new(big.Int).Mul(Scale, Scale)
+
+    // Walk bins in [lower, upper]
+    for binId := pos.LowerBinId; binId <= pos.UpperBinId; binId++ {
+        // Position-local index within LiquidityShares/FeeInfos arrays
+        posIdx := int(binId - pos.LowerBinId)
+        if posIdx < 0 || posIdx >= len(pos.LiquidityShares) {
+            continue
+        }
+        arrIdx := binIdToBinArrayIndex(binId)
+        arr := arrays[arrIdx]
+        if arr == nil {
+            continue
+        }
+        // Offset within array (size MAX_BIN_PER_ARRAY)
+        // For negative bin ids, replicate TS logic: index*size is floor division already from binIdToBinArrayIndex
+        size := int32(lb_clmm.MAX_BIN_PER_ARRAY)
+        offset := binId - int32(arrIdx)*size
+        if offset < 0 || offset >= size {
+            continue
+        }
+        i := int(offset)
+        // Liquidity share for this bin in position (index by position-local index)
+        share := pos.LiquidityShares[posIdx].BigInt()
+        if share.Sign() == 0 {
+            continue
+        }
+        // Bin data
+        bin := arr.Bins[i]
+        liqSupply := bin.LiquiditySupply.BigInt()
+        if liqSupply.Sign() == 0 {
+            continue
+        }
+        // amountX * share / liqSupply
+        xPart := new(big.Int).SetUint64(bin.AmountX)
+        xPart.Mul(xPart, share)
+        xPart.Quo(xPart, liqSupply)
+        totalX.Add(totalX, xPart)
+
+        yPart := new(big.Int).SetUint64(bin.AmountY)
+        yPart.Mul(yPart, share)
+        yPart.Quo(yPart, liqSupply)
+        totalY.Add(totalY, yPart)
+
+        // Fees: compute delta of per-liquidity accumulators and apply liquidity share
+        feeInfo := pos.FeeInfos[posIdx]
+        // deltaX = bin.FeeAmountXPerTokenStored - position.FeeXPerTokenComplete
+        deltaX := new(big.Int).Sub(bin.FeeAmountXPerTokenStored.BigInt(), feeInfo.FeeXPerTokenComplete.BigInt())
+        if deltaX.Sign() > 0 {
+            // (deltaX * share) >> 128  because both are Q64.64
+            fx := new(big.Int).Mul(deltaX, share)
+            fx.Quo(fx, scaleSquared)
+            feeXBig.Add(feeXBig, fx)
+        }
+        // deltaY
+        deltaY := new(big.Int).Sub(bin.FeeAmountYPerTokenStored.BigInt(), feeInfo.FeeYPerTokenComplete.BigInt())
+        if deltaY.Sign() > 0 {
+            fy := new(big.Int).Mul(deltaY, share)
+            fy.Quo(fy, scaleSquared)
+            feeYBig.Add(feeYBig, fy)
+        }
+        // Add pending leftovers
+        feeXBig.Add(feeXBig, new(big.Int).SetUint64(feeInfo.FeeXPending))
+        feeYBig.Add(feeYBig, new(big.Int).SetUint64(feeInfo.FeeYPending))
+    }
+
+    // Clamp to uint64 for return type
+    feeX := feeXBig
+    feeY := feeYBig
+    if feeX.Sign() < 0 { feeX = big.NewInt(0) }
+    if feeY.Sign() < 0 { feeY = big.NewInt(0) }
+
+    return &EnrichedPositionData{
+        TotalXAmount: totalX.String(),
+        TotalYAmount: totalY.String(),
+        FeeXToClaim:  new(big.Int).Set(feeX).Uint64(),
+        FeeYToClaim:  new(big.Int).Set(feeY).Uint64(),
+    }, nil
+}

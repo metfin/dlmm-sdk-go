@@ -52,6 +52,19 @@ func main() {
             log.Printf("%d) position=%s lower=%d upper=%d claimedX=%d claimedY=%d", i+1, p.PublicKey.String(), p.PositionData.LowerBinId, p.PositionData.UpperBinId, p.PositionData.TotalClaimedFeeXAmount, p.PositionData.TotalClaimedFeeYAmount)
         }
 	}
+
+	// Example 3: fetch positions for all users in a lbPair
+	resAllUsers, err := client.GetPositionsByLbPair(ctx, lbPair)
+	if err != nil {
+		log.Fatalf("get positions (all users): %v", err)
+	}
+	log.Printf("Found %d position(s) for all users", len(resAllUsers))
+
+	enrichedPositionData, err := client.GetEnrichedPositionData(ctx, solana.MustPublicKeyFromBase58("7zk9d39mHLHwBmNvoNbeZxwhZn1pWYGL1i7ZNvvco7JE"))
+	if err != nil {
+		log.Fatalf("get enriched position data: %v", err)
+	}
+	log.Printf("Enriched position data: %+v", enrichedPositionData)
 }
 
 
