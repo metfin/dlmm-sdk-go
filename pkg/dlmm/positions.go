@@ -97,11 +97,18 @@ func parsePositionAccount(acc solanarpc.KeyedAccount) (*LbPosition, error) {
 }
 
 // fetchPositions fetches positions using the given filters
-func (c *Client) fetchPositions(ctx context.Context, filters []solanarpc.RPCFilter) ([]LbPosition, error) {
+func (c *Client) fetchPositions(ctx context.Context, filters []solanarpc.RPCFilter, limit *uint64) ([]LbPosition, error) {
 	config := c.getQueryConfig()
 	opts := &solanarpc.GetProgramAccountsOpts{
 		Commitment: config.commitment,
 		Filters:    filters,
+	}
+	
+	// Add limit if specified to reduce RPC usage
+	if limit != nil {
+		opts.DataSlice = &solanarpc.DataSlice{
+			Length: limit,
+		}
 	}
 	
 	accs, err := c.rpc.GetProgramAccountsWithOpts(ctx, config.programID, opts)
@@ -139,9 +146,10 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 		return &PositionsByUserAndLbPairResult{ActiveBin: active, UserPositions: []LbPosition{}}, nil
 	}
 
-	// Fetch positions via memcmp filters
+	// Fetch positions via memcmp filters with limit to reduce RPC usage
 	filters := createPositionFilters(lbPair, userPubKey)
-	positions, err := c.fetchPositions(ctx, filters)
+	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
+	positions, err := c.fetchPositions(ctx, filters, &limit)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +161,8 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 // Mirrors the implementation of GetPositionsByUserAndLbPair but removes the user filter.
 func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicKey) ([]LbPosition, error) {
 	filters := createPositionFilters(lbPair, nil)
-	return c.fetchPositions(ctx, filters)
+	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
+	return c.fetchPositions(ctx, filters, &limit)
 }
 
 // memcmpFilter helper to construct an RPC memcmp filter.
