@@ -19,6 +19,12 @@ type PositionsByUserAndLbPairResult struct {
 	UserPositions []LbPosition
 }
 
+// PositionsResult is a generic result type for position queries with optional active bin info
+type PositionsResult struct {
+	ActiveBin *BinLiquidity // Optional active bin info
+	Positions []LbPosition
+}
+
 // positionQueryConfig holds common configuration for position queries
 type positionQueryConfig struct {
 	programID  solana.PublicKey
@@ -56,14 +62,30 @@ func (c *Client) fetchLbPairAccount(ctx context.Context, lbPair solana.PublicKey
 }
 
 // createPositionFilters creates memcmp filters for position queries
-func createPositionFilters(lbPair solana.PublicKey, userPubKey *solana.PublicKey) []solanarpc.RPCFilter {
+// Supports filtering by lbPair and/or user public keys
+func createPositionFilters(lbPair *solana.PublicKey, userPubKeys []solana.PublicKey) []solanarpc.RPCFilter {
 	filters := []solanarpc.RPCFilter{
 		memcmpFilter(0, lb_clmm.Account_PositionV2[:]),
-		memcmpFilter(8, lbPair.Bytes()),
 	}
 
-	if userPubKey != nil {
-		filters = append(filters, memcmpFilter(8+32, userPubKey.Bytes()))
+	// Add lbPair filter if provided
+	if lbPair != nil {
+		filters = append(filters, memcmpFilter(8, lbPair.Bytes()))
+	}
+
+	// Add user filters if provided
+	if len(userPubKeys) > 0 {
+		// If we have both lbPair and users, filter by users within that pool
+		if lbPair != nil {
+			for _, userPubKey := range userPubKeys {
+				filters = append(filters, memcmpFilter(8+32, userPubKey.Bytes()))
+			}
+		} else {
+			// If only users provided, filter by users across all pools
+			for _, userPubKey := range userPubKeys {
+				filters = append(filters, memcmpFilter(8+32, userPubKey.Bytes()))
+			}
+		}
 	}
 
 	return filters
@@ -128,10 +150,8 @@ func (c *Client) fetchPositions(ctx context.Context, filters []solanarpc.RPCFilt
 	return positions, nil
 }
 
-// GetPositionsByUserAndLbPair fetches active bin info and positions for a user in an lbPair.
-// If userPubKey is nil, returns only activeBin with empty positions.
-func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.PublicKey, userPubKey *solana.PublicKey) (*PositionsByUserAndLbPairResult, error) {
-	// Fetch lbPair account for activeId and binStep
+// fetchActiveBin fetches and computes the active bin information for a given lbPair
+func (c *Client) fetchActiveBin(ctx context.Context, lbPair solana.PublicKey) (*BinLiquidity, error) {
 	lb, err := c.fetchLbPairAccount(ctx, lbPair)
 	if err != nil {
 		return nil, err
@@ -139,30 +159,103 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 
 	activeID := lb.ActiveId
 	price := getPriceOfBinByBinId(activeID, lb.BinStep)
-	active := BinLiquidity{BinID: activeID, Price: price, PricePerToken: price}
+	active := &BinLiquidity{BinID: activeID, Price: price, PricePerToken: price}
+	
+	return active, nil
+}
 
-	// If no user key, return only active bin
-	if userPubKey == nil {
-		return &PositionsByUserAndLbPairResult{ActiveBin: active, UserPositions: []LbPosition{}}, nil
-	}
-
-	// Fetch positions via memcmp filters with limit to reduce RPC usage
-	filters := createPositionFilters(lbPair, userPubKey)
-	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
-	positions, err := c.fetchPositions(ctx, filters, &limit)
+// fetchPositionsWithOptionalActiveBin fetches positions and optionally includes active bin info
+func (c *Client) fetchPositionsWithOptionalActiveBin(ctx context.Context, filters []solanarpc.RPCFilter, limit *uint64, includeActiveBin bool, lbPair *solana.PublicKey) (*PositionsResult, error) {
+	// Fetch positions
+	positions, err := c.fetchPositions(ctx, filters, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	return &PositionsByUserAndLbPairResult{ActiveBin: active, UserPositions: positions}, nil
+	result := &PositionsResult{
+		Positions: positions,
+	}
+
+	// Optionally fetch active bin info if lbPair is provided
+	if includeActiveBin && lbPair != nil {
+		activeBin, err := c.fetchActiveBin(ctx, *lbPair)
+		if err != nil {
+			return nil, err
+		}
+		result.ActiveBin = activeBin
+	}
+
+	return result, nil
+}
+
+// GetPositionsByUserAndLbPair fetches active bin info and positions for a user in an lbPair.
+// If userPubKey is nil, returns only activeBin with empty positions.
+func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.PublicKey, userPubKey *solana.PublicKey, includeActiveBin ...bool) (*PositionsByUserAndLbPairResult, error) {
+	// Determine if we should include active bin (default to true for backward compatibility)
+	includeBin := len(includeActiveBin) == 0 || includeActiveBin[0]
+
+	// If no user key, return only active bin if requested
+	if userPubKey == nil {
+		if includeBin {
+			activeBin, err := c.fetchActiveBin(ctx, lbPair)
+			if err != nil {
+				return nil, err
+			}
+			return &PositionsByUserAndLbPairResult{ActiveBin: *activeBin, UserPositions: []LbPosition{}}, nil
+		}
+		return &PositionsByUserAndLbPairResult{ActiveBin: BinLiquidity{}, UserPositions: []LbPosition{}}, nil
+	}
+
+	// Fetch positions using the new dynamic filter
+	userPubKeys := []solana.PublicKey{*userPubKey}
+	filters := createPositionFilters(&lbPair, userPubKeys)
+	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
+	
+	result, err := c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
+	if err != nil {
+		return nil, err
+	}
+
+	activeBin := BinLiquidity{}
+	if result.ActiveBin != nil {
+		activeBin = *result.ActiveBin
+	}
+
+	return &PositionsByUserAndLbPairResult{
+		ActiveBin:     activeBin,
+		UserPositions: result.Positions,
+	}, nil
 }
 
 // GetPositionsByLbPair returns all PositionV2 accounts that belong to the given lbPair.
-// Mirrors the implementation of GetPositionsByUserAndLbPair but removes the user filter.
-func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicKey) ([]LbPosition, error) {
-	filters := createPositionFilters(lbPair, nil)
+// Optionally includes active bin information.
+func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicKey, includeActiveBin ...bool) (*PositionsResult, error) {
+	filters := createPositionFilters(&lbPair, nil)
 	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
-	return c.fetchPositions(ctx, filters, &limit)
+	
+	includeBin := len(includeActiveBin) > 0 && includeActiveBin[0]
+	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
+}
+
+// GetPositionsByUser returns all PositionV2 accounts that belong to the given user across all pools.
+// Note: Active bin information is not available when searching across all pools.
+func (c *Client) GetPositionsByUser(ctx context.Context, userPubKey solana.PublicKey) (*PositionsResult, error) {
+	userPubKeys := []solana.PublicKey{userPubKey}
+	filters := createPositionFilters(nil, userPubKeys)
+	limit := uint64(50) // Higher limit since we're searching across all pools
+	
+	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, false, nil)
+}
+
+// GetPositionsByUserInPool returns positions for a specific user in a specific pool.
+// Optionally includes active bin information.
+func (c *Client) GetPositionsByUserInPool(ctx context.Context, lbPair solana.PublicKey, userPubKey solana.PublicKey, includeActiveBin ...bool) (*PositionsResult, error) {
+	userPubKeys := []solana.PublicKey{userPubKey}
+	filters := createPositionFilters(&lbPair, userPubKeys)
+	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
+	
+	includeBin := len(includeActiveBin) > 0 && includeActiveBin[0]
+	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
 }
 
 // memcmpFilter helper to construct an RPC memcmp filter.
