@@ -16,6 +16,13 @@ const (
 	NetworkLocal   Network = "localhost"
 )
 
+var (
+	SystemProgramAccount      = solana.MustPublicKeyFromBase58("11111111111111111111111111111111")
+	EventAuthorityAccount     = solana.MustPublicKeyFromBase58("D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6")
+	AssosicatedTokenProgramID = solana.MustPublicKeyFromBase58("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'")
+	TokenProgramID            = solana.MustPublicKeyFromBase58("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+)
+
 // ProgramIDs maps network to the DLMM program ID.
 var ProgramIDs = map[Network]solana.PublicKey{
 	NetworkDevnet:  solana.MustPublicKeyFromBase58("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"),
@@ -46,24 +53,24 @@ var (
 
 // Lamport-denominated rent-exempt fees (pre-computed from SOL values in TS SDK).
 const (
-	BinArrayFeeLamports        uint64 = 71_437_440
-	PositionFeeLamports        uint64 = 57_406_080
-	TokenAccountFeeLamports    uint64 = 2_039_280
-	PoolFeeLamports            uint64 = 7_182_720
-	BinArrayBitmapFeeLamports  uint64 = 11_804_160
+	BinArrayFeeLamports       uint64 = 71_437_440
+	PositionFeeLamports       uint64 = 57_406_080
+	TokenAccountFeeLamports   uint64 = 2_039_280
+	PoolFeeLamports           uint64 = 7_182_720
+	BinArrayBitmapFeeLamports uint64 = 11_804_160
 )
 
 // Constants mirrored from IDL constants used by the TS SDK helpers.
 // Note: these duplicate values present in pkg/generated but are provided here
 // for convenience within the user-facing dlmm package.
 const (
-	MaxBinArraySize          uint64 = 70   // MAX_BIN_PER_ARRAY
-	DefaultBinPerPosition    uint64 = 70   // DEFAULT_BIN_PER_POSITION
-	BinArrayBitmapSize       int32  = 512  // BIN_ARRAY_BITMAP_SIZE
-	ExtensionBinArrayBitmapSize uint64 = 12 // EXTENSION_BINARRAY_BITMAP_SIZE
-	PositionMaxLength        uint64 = 1400 // POSITION_MAX_LENGTH
-	MaxResizeLength          uint64 = 70   // MAX_RESIZE_LENGTH
-	MaxBinsPerPosition       uint64 = 1400 // Equal to POSITION_MAX_LENGTH
+	MaxBinArraySize             uint64 = 70   // MAX_BIN_PER_ARRAY
+	DefaultBinPerPosition       uint64 = 70   // DEFAULT_BIN_PER_POSITION
+	BinArrayBitmapSize          int32  = 512  // BIN_ARRAY_BITMAP_SIZE
+	ExtensionBinArrayBitmapSize uint64 = 12   // EXTENSION_BINARRAY_BITMAP_SIZE
+	PositionMaxLength           uint64 = 1400 // POSITION_MAX_LENGTH
+	MaxResizeLength             uint64 = 70   // MAX_RESIZE_LENGTH
+	MaxBinsPerPosition          uint64 = 1400 // Equal to POSITION_MAX_LENGTH
 )
 
 // Misc values from the TS SDK.
@@ -73,10 +80,10 @@ var (
 )
 
 const (
-	MaxClaimAllAllowed        = 2
+	MaxClaimAllAllowed         = 2
 	MaxBinLengthAllowedInOneTx = 26
-	MaxActiveBinSlippage      = 3
-	MaxExtraBinArrays         = 3
+	MaxActiveBinSlippage       = 3
+	MaxExtraBinArrays          = 3
 )
 
 // Max unsigned 64-bit integer as big.Int
@@ -87,5 +94,3 @@ var U64Max = func() *big.Int {
 	}
 	return v
 }()
-
-
