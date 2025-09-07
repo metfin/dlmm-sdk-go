@@ -63,29 +63,17 @@ func (c *Client) fetchLbPairAccount(ctx context.Context, lbPair solana.PublicKey
 
 // createPositionFilters creates memcmp filters for position queries
 // Supports filtering by lbPair and/or user public keys
-func createPositionFilters(lbPair *solana.PublicKey, userPubKeys []solana.PublicKey) []solanarpc.RPCFilter {
+func createPositionFilters(lbPair *solana.PublicKey, user *solana.PublicKey) []solanarpc.RPCFilter {
 	filters := []solanarpc.RPCFilter{
 		memcmpFilter(0, lb_clmm.Account_PositionV2[:]),
 	}
 
-	// Add lbPair filter if provided
 	if lbPair != nil {
 		filters = append(filters, memcmpFilter(8, lbPair.Bytes()))
 	}
 
-	// Add user filters if provided
-	if len(userPubKeys) > 0 {
-		// If we have both lbPair and users, filter by users within that pool
-		if lbPair != nil {
-			for _, userPubKey := range userPubKeys {
-				filters = append(filters, memcmpFilter(8+32, userPubKey.Bytes()))
-			}
-		} else {
-			// If only users provided, filter by users across all pools
-			for _, userPubKey := range userPubKeys {
-				filters = append(filters, memcmpFilter(8+32, userPubKey.Bytes()))
-			}
-		}
+	if user != nil {
+		filters = append(filters, memcmpFilter(8+32, user.Bytes()))
 	}
 
 	return filters
@@ -121,26 +109,47 @@ func parsePositionAccount(acc solanarpc.KeyedAccount) (*LbPosition, error) {
 // fetchPositions fetches positions using the given filters
 func (c *Client) fetchPositions(ctx context.Context, filters []solanarpc.RPCFilter, limit *uint64) ([]LbPosition, error) {
 	config := c.getQueryConfig()
-	opts := &solanarpc.GetProgramAccountsOpts{
+	keyOnlyOpts := &solanarpc.GetProgramAccountsOpts{
 		Commitment: config.commitment,
 		Filters:    filters,
 	}
 
-	// Add limit if specified to reduce RPC usage
-	if limit != nil {
-		opts.DataSlice = &solanarpc.DataSlice{
-			Length: limit,
-		}
-	}
-
-	accs, err := c.rpc.GetProgramAccountsWithOpts(ctx, config.programID, opts)
+	accs, err := c.rpc.GetProgramAccountsWithOpts(ctx, config.programID, keyOnlyOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	positions := make([]LbPosition, 0, len(accs))
-	for _, acc := range accs {
-		pos, err := parsePositionAccount(*acc)
+	// Apply a client-side cap on number of accounts if a limit is provided
+	if limit != nil && *limit < uint64(len(accs)) {
+		accs = accs[:*limit]
+	}
+
+	// If nothing to fetch, return early
+	if len(accs) == 0 {
+		return []LbPosition{}, nil
+	}
+
+	// Phase 2: fetch full accounts for the selected keys
+	keys := make([]solana.PublicKey, 0, len(accs))
+	for _, a := range accs {
+		keys = append(keys, a.Pubkey)
+	}
+	maOpts := &solanarpc.GetMultipleAccountsOpts{Commitment: config.commitment}
+	multi, err := c.rpc.GetMultipleAccountsWithOpts(ctx, keys, maOpts)
+	if err != nil {
+		return nil, err
+	}
+	if multi == nil || multi.Value == nil {
+		return nil, ErrAccountNotFound
+	}
+
+	positions := make([]LbPosition, 0, len(multi.Value))
+	for i, acct := range multi.Value {
+		if acct == nil {
+			continue
+		}
+		ka := solanarpc.KeyedAccount{Pubkey: keys[i], Account: acct}
+		pos, err := parsePositionAccount(ka)
 		if err != nil {
 			return nil, err
 		}
@@ -188,41 +197,41 @@ func (c *Client) fetchPositionsWithOptionalActiveBin(ctx context.Context, filter
 	return result, nil
 }
 
+// PositionsQueryOptions standardizes position queries.
+type PositionsQueryOptions struct {
+    LbPair           *solana.PublicKey
+    User             *solana.PublicKey
+    IncludeActiveBin bool
+    Limit            uint64
+}
+
+// QueryPositions executes a standardized position query based on options.
+func (c *Client) QueryPositions(ctx context.Context, opts PositionsQueryOptions) (*PositionsResult, error) {
+    // default limit
+    limit := opts.Limit
+    if limit == 0 {
+        limit = 25
+    }
+
+    filters := createPositionFilters(opts.LbPair, opts.User)
+    return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, opts.IncludeActiveBin, opts.LbPair)
+}
+
 // GetPositionsByUserAndLbPair fetches active bin info and positions for a user in an lbPair.
 // If userPubKey is nil, returns only activeBin with empty positions.
 func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.PublicKey, userPubKey *solana.PublicKey, includeActiveBin ...bool) (*PositionsByUserAndLbPairResult, error) {
-	// Determine if we should include active bin (default to true for backward compatibility)
 	includeBin := len(includeActiveBin) == 0 || includeActiveBin[0]
-
-	// If no user key, return only active bin if requested
-	if userPubKey == nil {
-		if includeBin {
-			activeBin, err := c.fetchActiveBin(ctx, lbPair)
-			if err != nil {
-				return nil, err
-			}
-			return &PositionsByUserAndLbPairResult{ActiveBin: *activeBin, UserPositions: []LbPosition{}}, nil
-		}
-		return &PositionsByUserAndLbPairResult{ActiveBin: BinLiquidity{}, UserPositions: []LbPosition{}}, nil
-	}
-
-	// Fetch positions using the new dynamic filter
-	userPubKeys := []solana.PublicKey{*userPubKey}
-	filters := createPositionFilters(&lbPair, userPubKeys)
-	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
-	
-	result, err := c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
+	result, err := c.QueryPositions(ctx, PositionsQueryOptions{
+		LbPair:           &lbPair,
+		User:             userPubKey,
+		IncludeActiveBin: includeBin,
+		Limit:            25,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	activeBin := BinLiquidity{}
-	if result.ActiveBin != nil {
-		activeBin = *result.ActiveBin
-	}
-
 	return &PositionsByUserAndLbPairResult{
-		ActiveBin:     activeBin,
+		ActiveBin:     *result.ActiveBin,
 		UserPositions: result.Positions,
 	}, nil
 }
@@ -230,32 +239,21 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 // GetPositionsByLbPair returns all PositionV2 accounts that belong to the given lbPair.
 // Optionally includes active bin information.
 func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicKey, includeActiveBin ...bool) (*PositionsResult, error) {
-	filters := createPositionFilters(&lbPair, nil)
-	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
-	
-	includeBin := len(includeActiveBin) > 0 && includeActiveBin[0]
-	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
+	includeBin := len(includeActiveBin) == 0 || includeActiveBin[0]
+	return c.QueryPositions(ctx, PositionsQueryOptions{
+		LbPair:           &lbPair,
+		IncludeActiveBin: includeBin,
+		Limit:            25,
+	})
 }
 
 // GetPositionsByUser returns all PositionV2 accounts that belong to the given user across all pools.
 // Note: Active bin information is not available when searching across all pools.
 func (c *Client) GetPositionsByUser(ctx context.Context, userPubKey solana.PublicKey) (*PositionsResult, error) {
-	userPubKeys := []solana.PublicKey{userPubKey}
-	filters := createPositionFilters(nil, userPubKeys)
-	limit := uint64(50) // Higher limit since we're searching across all pools
-	
-	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, false, nil)
-}
-
-// GetPositionsByUserInPool returns positions for a specific user in a specific pool.
-// Optionally includes active bin information.
-func (c *Client) GetPositionsByUserInPool(ctx context.Context, lbPair solana.PublicKey, userPubKey solana.PublicKey, includeActiveBin ...bool) (*PositionsResult, error) {
-	userPubKeys := []solana.PublicKey{userPubKey}
-	filters := createPositionFilters(&lbPair, userPubKeys)
-	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
-	
-	includeBin := len(includeActiveBin) > 0 && includeActiveBin[0]
-	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
+	return c.QueryPositions(ctx, PositionsQueryOptions{
+		User:  &userPubKey,
+		Limit: 50,
+	})
 }
 
 // memcmpFilter helper to construct an RPC memcmp filter.
@@ -353,161 +351,58 @@ func (c *Client) fetchBinArrays(ctx context.Context, lbPair solana.PublicKey, lo
 	return arrays, nil
 }
 
-// calculateBinAmounts calculates token amounts for a specific bin
-func calculateBinAmounts(bin *lb_clmm.Bin, share *big.Int, liqSupply *big.Int) (*big.Int, *big.Int) {
-	if share.Sign() == 0 || liqSupply.Sign() == 0 {
-		return big.NewInt(0), big.NewInt(0)
-	}
-
-	// amountX * share / liqSupply
-	xPart := new(big.Int).SetUint64(bin.AmountX)
-	xPart.Mul(xPart, share)
-	xPart.Quo(xPart, liqSupply)
-
-	yPart := new(big.Int).SetUint64(bin.AmountY)
-	yPart.Mul(yPart, share)
-	yPart.Quo(yPart, liqSupply)
-
-	return xPart, yPart
+// PositionBinArraysAndActive encapsulates bin array range and active bin for a position
+type PositionBinArraysAndActive struct {
+    ActiveBin   BinLiquidity
+    BinArrays   map[int64]*lb_clmm.BinArray
+    LowerIndex  int64
+    UpperIndex  int64
+    LowerBinId  int32
+    UpperBinId  int32
+    LbPair      solana.PublicKey
 }
 
-// calculateBinFees calculates claimable fees for a specific bin
-func calculateBinFees(bin *lb_clmm.Bin, feeInfo *lb_clmm.FeeInfo, share *big.Int, scaleSquared *big.Int) (*big.Int, *big.Int) {
-	feeXBig := big.NewInt(0)
-	feeYBig := big.NewInt(0)
+// GetPositionBinArraysAndActiveBin returns the bin arrays covering a position's bin range
+// along with the active bin info for the position's pool (lbPair).
+func (c *Client) GetPositionBinArraysAndActiveBin(ctx context.Context, positionAddr solana.PublicKey) (*PositionBinArraysAndActive, error) {
+    // Load position account
+    resp, err := c.rpc.GetAccountInfoWithOpts(ctx, positionAddr, &solanarpc.GetAccountInfoOpts{Commitment: c.commitment})
+    if err != nil {
+        return nil, err
+    }
+    if resp == nil || resp.Value == nil {
+        return nil, ErrAccountNotFound
+    }
 
-	// Fees: compute delta of per-liquidity accumulators and apply liquidity share
-	// deltaX = bin.FeeAmountXPerTokenStored - position.FeeXPerTokenComplete
-	deltaX := new(big.Int).Sub(bin.FeeAmountXPerTokenStored.BigInt(), feeInfo.FeeXPerTokenComplete.BigInt())
-	if deltaX.Sign() > 0 {
-		// (deltaX * share) >> 128  because both are Q64.64
-		fx := new(big.Int).Mul(deltaX, share)
-		fx.Quo(fx, scaleSquared)
-		feeXBig.Add(feeXBig, fx)
-	}
+    posData := resp.Value.Data.GetBinary()
+    pos, err := lb_clmm.ParseAccount_PositionV2(posData)
+    if err != nil {
+        return nil, fmt.Errorf("decode position: %w", err)
+    }
 
-	// deltaY
-	deltaY := new(big.Int).Sub(bin.FeeAmountYPerTokenStored.BigInt(), feeInfo.FeeYPerTokenComplete.BigInt())
-	if deltaY.Sign() > 0 {
-		fy := new(big.Int).Mul(deltaY, share)
-		fy.Quo(fy, scaleSquared)
-		feeYBig.Add(feeYBig, fy)
-	}
+    // Compute bin array index range for the position's bins
+    lowerIdx := binIdToBinArrayIndex(pos.LowerBinId)
+    upperIdx := binIdToBinArrayIndex(pos.UpperBinId)
 
-	// Add pending leftovers
-	feeXBig.Add(feeXBig, new(big.Int).SetUint64(feeInfo.FeeXPending))
-	feeYBig.Add(feeYBig, new(big.Int).SetUint64(feeInfo.FeeYPending))
+    // Fetch bin arrays
+    arrays, err := c.fetchBinArrays(ctx, pos.LbPair, lowerIdx, upperIdx)
+    if err != nil {
+        return nil, err
+    }
 
-	return feeXBig, feeYBig
-}
+    // Fetch active bin for the lbPair
+    active, err := c.fetchActiveBin(ctx, pos.LbPair)
+    if err != nil {
+        return nil, err
+    }
 
-// GetEnrichedPositionData computes total token amounts and claimable fees for a position.
-// Returns raw amounts (unscaled by token decimals).
-func (c *Client) GetEnrichedPositionData(ctx context.Context, positionAddr solana.PublicKey) (*EnrichedPositionData, error) {
-	// Load position account
-	resp, err := c.rpc.GetAccountInfoWithOpts(ctx, positionAddr, &solanarpc.GetAccountInfoOpts{Commitment: c.commitment})
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil || resp.Value == nil {
-		return nil, ErrAccountNotFound
-	}
-	bin := resp.Value.Data.GetBinary()
-	pos, err := lb_clmm.ParseAccount_PositionV2(bin)
-	if err != nil {
-		return nil, fmt.Errorf("decode position: %w", err)
-	}
-
-	// Load lbPair to know binStep if needed; amounts are directly in bin though
-	_, err = c.fetchLbPairAccount(ctx, pos.LbPair)
-	if err != nil {
-		return nil, err
-	}
-
-	// Determine bin array indices range
-	lowerIdx := binIdToBinArrayIndex(pos.LowerBinId)
-	upperIdx := binIdToBinArrayIndex(pos.UpperBinId)
-
-	// Fetch all required BinArray accounts
-	arrays, err := c.fetchBinArrays(ctx, pos.LbPair, lowerIdx, upperIdx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Aggregate totals and fees
-	totalX := new(big.Int)
-	totalY := new(big.Int)
-	feeXBig := new(big.Int)
-	feeYBig := new(big.Int)
-	scaleSquared := new(big.Int).Mul(Scale, Scale)
-
-	// Walk bins in [lower, upper]
-	for binId := pos.LowerBinId; binId <= pos.UpperBinId; binId++ {
-		// Position-local index within LiquidityShares/FeeInfos arrays
-		posIdx := int(binId - pos.LowerBinId)
-		if posIdx < 0 || posIdx >= len(pos.LiquidityShares) {
-			continue
-		}
-		arrIdx := binIdToBinArrayIndex(binId)
-		arr := arrays[arrIdx]
-		if arr == nil {
-			continue
-		}
-		// Offset within array (size MAX_BIN_PER_ARRAY)
-		// For negative bin ids, replicate TS logic: index*size is floor division already from binIdToBinArrayIndex
-		size := int32(lb_clmm.MAX_BIN_PER_ARRAY)
-		offset := binId - int32(arrIdx)*size
-		if offset < 0 || offset >= size {
-			continue
-		}
-		i := int(offset)
-		// Liquidity share for this bin in position (index by position-local index)
-		share := pos.LiquidityShares[posIdx].BigInt()
-		if share.Sign() == 0 {
-			continue
-		}
-		// Bin data
-		bin := arr.Bins[i]
-		liqSupply := bin.LiquiditySupply.BigInt()
-		if liqSupply.Sign() == 0 {
-			continue
-		}
-
-		// Calculate amounts and fees for this bin
-		xPart, yPart := calculateBinAmounts(&bin, share, liqSupply)
-		totalX.Add(totalX, xPart)
-		totalY.Add(totalY, yPart)
-
-		feeInfo := pos.FeeInfos[posIdx]
-		fx, fy := calculateBinFees(&bin, &feeInfo, share, scaleSquared)
-		feeXBig.Add(feeXBig, fx)
-		feeYBig.Add(feeYBig, fy)
-	}
-
-	// Clamp to uint64 for return type
-	feeX := feeXBig
-	feeY := feeYBig
-	if feeX.Sign() < 0 {
-		feeX = big.NewInt(0)
-	}
-	if feeY.Sign() < 0 {
-		feeY = big.NewInt(0)
-	}
-
-	return &EnrichedPositionData{
-		TotalXAmount: totalX.String(),
-		TotalYAmount: totalY.String(),
-		FeeXToClaim:  new(big.Int).Set(feeX).Uint64(),
-		FeeYToClaim:  new(big.Int).Set(feeY).Uint64(),
-
-		Owner:            pos.Owner,
-		Operator:         pos.Operator,
-		FeeOwner:         pos.FeeOwner,
-		LbPair:           pos.LbPair,
-		LockReleasePoint: pos.LockReleasePoint,
-		LastUpdatedAt:    pos.LastUpdatedAt,
-
-		LowerBinId: pos.LowerBinId,
-		UpperBinId: pos.UpperBinId,
-	}, nil
+    return &PositionBinArraysAndActive{
+        ActiveBin:  *active,
+        BinArrays:  arrays,
+        LowerIndex: lowerIdx,
+        UpperIndex: upperIdx,
+        LowerBinId: pos.LowerBinId,
+        UpperBinId: pos.UpperBinId,
+        LbPair:     pos.LbPair,
+    }, nil
 }

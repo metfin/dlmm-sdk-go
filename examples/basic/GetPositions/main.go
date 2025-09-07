@@ -87,19 +87,14 @@ func main() {
 	// Example 5: fetch positions for a specific user in a specific pool with optional active bin
 	if userStr != "" {
 		user := solana.MustPublicKeyFromBase58(userStr)
-		resUserInPool, err := client.GetPositionsByUserInPool(ctx, lbPair, user, true)
+		resUserInPool, err := client.GetPositionsByUserAndLbPair(ctx, lbPair, &user, true)
 		if err != nil {
 			log.Fatalf("get positions (user in pool with bin): %v", err)
 		}
 		log.Printf("Found %d position(s) for user in pool with active bin ID=%d Price=%s", 
-			len(resUserInPool.Positions), resUserInPool.ActiveBin.BinID, resUserInPool.ActiveBin.Price)
+			len(resUserInPool.UserPositions), resUserInPool.ActiveBin.BinID, resUserInPool.ActiveBin.Price)
 	}
 
-	enrichedPositionData, err := client.GetEnrichedPositionData(ctx, solana.MustPublicKeyFromBase58("7zk9d39mHLHwBmNvoNbeZxwhZn1pWYGL1i7ZNvvco7JE"))
-	if err != nil {
-		log.Fatalf("get enriched position data: %v", err)
-	}
-	log.Printf("Enriched position data: %+v", enrichedPositionData)
 }
 
 

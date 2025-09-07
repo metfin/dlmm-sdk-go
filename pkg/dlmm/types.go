@@ -44,22 +44,3 @@ type LbPosition struct {
 	PositionData PositionData
 	Version      int // 2 for PositionV2
 }
-
-// EnrichedPositionData is a computed summary for a single position address.
-// Values are raw token units (not adjusted for decimals).
-type EnrichedPositionData struct {
-	TotalXAmount string
-	TotalYAmount string
-	FeeXToClaim  uint64
-	FeeYToClaim  uint64
-
-	Owner            solana.PublicKey
-	Operator         solana.PublicKey
-	FeeOwner         solana.PublicKey
-	LbPair           solana.PublicKey
-	LockReleasePoint uint64
-	LastUpdatedAt    int64
-
-	LowerBinId int32
-	UpperBinId int32
-}
