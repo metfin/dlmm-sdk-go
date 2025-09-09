@@ -235,8 +235,7 @@ func (c *Client) GetPositionsByUserAndLbPair(ctx context.Context, lbPair solana.
 	}
 
 	// Fetch positions using the new dynamic filter
-	userPubKeys := []solana.PublicKey{*userPubKey}
-	filters := createPositionFilters(&lbPair, userPubKeys)
+	filters := createPositionFilters(&lbPair, userPubKey)
 	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
 
 	result, err := c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, includeBin, &lbPair)
@@ -262,8 +261,7 @@ func (c *Client) GetPositionsByLbPair(ctx context.Context, lbPair solana.PublicK
 // GetPositionsByUser returns all PositionV2 accounts that belong to the given user across all pools.
 // Note: Active bin information is not available when searching across all pools.
 func (c *Client) GetPositionsByUser(ctx context.Context, userPubKey solana.PublicKey) (*PositionsResult, error) {
-	userPubKeys := []solana.PublicKey{userPubKey}
-	filters := createPositionFilters(nil, userPubKeys)
+	filters := createPositionFilters(nil, &userPubKey)
 	limit := uint64(50) // Higher limit since we're searching across all pools
 
 	return c.fetchPositionsWithOptionalActiveBin(ctx, filters, &limit, false, nil)
@@ -272,8 +270,7 @@ func (c *Client) GetPositionsByUser(ctx context.Context, userPubKey solana.Publi
 // GetPositionsByUserInPool returns positions for a specific user in a specific pool.
 // Optionally includes active bin information.
 func (c *Client) GetPositionsByUserInPool(ctx context.Context, lbPair solana.PublicKey, userPubKey solana.PublicKey, includeActiveBin ...bool) (*PositionsResult, error) {
-	userPubKeys := []solana.PublicKey{userPubKey}
-	filters := createPositionFilters(&lbPair, userPubKeys)
+	filters := createPositionFilters(&lbPair, &userPubKey)
 	limit := uint64(25) // Limit to 25 accounts to reduce RPC usage
 
 	includeBin := len(includeActiveBin) > 0 && includeActiveBin[0]
