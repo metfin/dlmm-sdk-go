@@ -14,7 +14,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-    rpcUrl := os.Getenv("RPC_URL")
+	rpcUrl := os.Getenv("RPC_URL")
 	rpc := solanarpc.New(rpcUrl)
 
 	client := dlmm.NewClient(
@@ -22,8 +22,8 @@ func main() {
 		dlmm.WithProgramID(solana.MustPublicKeyFromBase58("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo")),
 	)
 
-    lbPairStr := os.Getenv("LBPAIR")
-    userStr := os.Getenv("POSITION_OWNER")
+	lbPairStr := os.Getenv("LBPAIR")
+	userStr := os.Getenv("POSITION_OWNER")
 
 	if lbPairStr == "" {
 		log.Println("LBPAIR env var not set; please export a valid lbPair public key. Exiting.")
@@ -48,9 +48,9 @@ func main() {
 		}
 		log.Printf("Active bin (with user): ID=%d Price=%s", resWithUser.ActiveBin.BinID, resWithUser.ActiveBin.Price)
 		log.Printf("Found %d position(s) for user", len(resWithUser.UserPositions))
-        for i, p := range resWithUser.UserPositions {
-            log.Printf("%d) position=%s lower=%d upper=%d claimedX=%d claimedY=%d", i+1, p.PublicKey.String(), p.PositionData.LowerBinId, p.PositionData.UpperBinId, p.PositionData.TotalClaimedFeeXAmount, p.PositionData.TotalClaimedFeeYAmount)
-        }
+		for i, p := range resWithUser.UserPositions {
+			log.Printf("%d) position=%s lower=%d upper=%d claimedX=%d claimedY=%d", i+1, p.PublicKey.String(), p.PositionData.LowerBinId, p.PositionData.UpperBinId, p.PositionData.TotalClaimedFeeXAmount, p.PositionData.TotalClaimedFeeYAmount)
+		}
 	}
 
 	// Example 3: fetch positions for all users in a lbPair
@@ -65,7 +65,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("get positions (all users with bin): %v", err)
 	}
-	log.Printf("Found %d position(s) for all users with active bin ID=%d Price=%s", 
+	log.Printf("Found %d position(s) for all users with active bin ID=%d Price=%s",
 		len(resAllUsersWithBin.Positions), resAllUsersWithBin.ActiveBin.BinID, resAllUsersWithBin.ActiveBin.Price)
 
 	// Example 4: fetch all positions for a specific user across all pools
@@ -77,9 +77,9 @@ func main() {
 		}
 		log.Printf("Found %d position(s) for user across all pools", len(resUserAllPools.Positions))
 		for i, p := range resUserAllPools.Positions {
-			log.Printf("%d) position=%s pool=%s lower=%d upper=%d claimedX=%d claimedY=%d", 
-				i+1, p.PublicKey.String(), p.PositionData.LbPair.String(), 
-				p.PositionData.LowerBinId, p.PositionData.UpperBinId, 
+			log.Printf("%d) position=%s pool=%s lower=%d upper=%d claimedX=%d claimedY=%d",
+				i+1, p.PublicKey.String(), p.PositionData.LbPair.String(),
+				p.PositionData.LowerBinId, p.PositionData.UpperBinId,
 				p.PositionData.TotalClaimedFeeXAmount, p.PositionData.TotalClaimedFeeYAmount)
 		}
 	}
@@ -91,10 +91,8 @@ func main() {
 		if err != nil {
 			log.Fatalf("get positions (user in pool with bin): %v", err)
 		}
-		log.Printf("Found %d position(s) for user in pool with active bin ID=%d Price=%s", 
+		log.Printf("Found %d position(s) for user in pool with active bin ID=%d Price=%s",
 			len(resUserInPool.UserPositions), resUserInPool.ActiveBin.BinID, resUserInPool.ActiveBin.Price)
 	}
 
 }
-
-
